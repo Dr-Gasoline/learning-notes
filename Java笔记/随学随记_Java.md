@@ -19,7 +19,7 @@ class Student {
     String name;
     int age;
 
-    //构建方法
+    //构造方法
     public Student(String name, int age) {
         this.name = name;
         this.age = age;
@@ -148,7 +148,7 @@ dog.fetch();  // 调用 Dog 自己的方法
 -  `super` 关键字用于调用父类中对子类可见的的成员或方法。  
 如： 
     - 构造函数中通过`super(……)`调用父类的构造方法,且必须写在第一行；
-    - 无论子类中父类的方法是否重写，成员是否同名重新赋值，子类总中可以通过`super.method()`、`super.item`调用父类的方法和成员。Btw，`private`依然无法访问。
+    - 无论子类中父类的方法是否重写，成员是否同名重新赋值，子类中总可以通过`super.method()`、`super.item`调用父类的方法和成员。Btw，`private`依然无法访问。
 
 ---
 
