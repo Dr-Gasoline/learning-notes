@@ -404,25 +404,6 @@ if (out !== expected)
 | `y = expression;` | 阻塞赋值，赋值完成后执行后续语句 | 过程块内，如 `initial` 、`always` |
 | `y <= expression;` | 非阻塞赋值，先计算右值，将左值更新安排到非阻塞更新阶段 | 同上 |
 
-## 7. 宏定义
-
-```verilog
-//定义
-`define WORDSIZE 8
-//含参宏定义
-`define isalp(c) (((c) <= "z" && (c) >= "a") || ((c) <= "Z" && (c) >= "A"))
-
-//使用
-wire alp;
-wire [7:0] ch;
-
-reg[1:`WORDSIZE] data;
-
-assign alp = (`isalp(ch))? 1'b1: 1'b0;
-```
-
-**注意**：引用宏名时也必须在宏名前加上符号 `` ` ``。
-
 # 三、程序中信号的处理
 
 ## 1. 连续赋值 `assign` ：  
@@ -494,7 +475,7 @@ for (i = 0; i < 8; i = i + 1)
 
 **注意**：  
 `for` 语句中不能直接声明临时索引变量，且不支持 `i++` 等自增、自减语法。  
-使用具名 `begin-end` 块可以在作用域内声明临时变量：
+可以通过 `begin: <命名> -end` 使用具名 `begin-end` 块，具名语句块作用域内可以声明临时变量：
 
 ```verilog
 always @(*) begin : calc
@@ -870,3 +851,258 @@ a = $random;
 ```
 
 赋给较窄变量时保留低位。结果可能为负，直接使用 `$random % N` 不保证得到非负数。
+
+# 六、编译预处理
+
+宏展开、文件包含和条件选择在源码预处理时完成，之后才对保留下来的代码进行语法分析与展开。指令本身不是运行时语句，也不直接代表硬件元件。
+
+## 1. 宏定义：
+
+### 1.1 定义与引用
+
+宏的本质是 **文本替换**，可以替换常量、表达式或代码片段，并不是具有数据类型的变量。
+
+```verilog
+`define WORDSIZE 8
+`define MASK 8'hFF
+`define DEBUG
+
+//以下声明与赋值写在模块内部：
+
+wire [`WORDSIZE-1:0] data;
+wire [`WORDSIZE-1:0] masked;
+
+assign masked = data & `MASK;
+
+```
+
+- 引用时，宏名前必须加反引号 `` ` ``。
+- 宏名区分大小写，常使用大写和下划线。
+- 宏可以没有替换内容，例如 `DEBUG`，用于标记某个编译选项是否启用。
+
+
+### 1.2 含参宏
+
+宏可以接收实参，将实参文本代入宏体：
+
+```verilog
+`define ADD(a, b) ((a) + (b))
+`define IS_NUM(c) (((c) >= "0") && ((c) <= "9"))
+`define XOR3(a, b, c) \
+    ((a) ^ (b) ^ (c))
+    //使用 \ 标识跨行
+
+// 模块内部
+
+wire [7:0] ch;
+wire is_digit;
+
+assign is_digit  = `IS_NUM(ch);
+```
+
+**注意**：
+
+- 定义含参宏时，宏名与左括号 `(` 紧邻；实参之间用逗号分隔。
+- 含参宏不是函数调用，而是将实参文本代入宏体，实际替换对象也要满足对应位置的语法。
+
+### 1.3 生效范围与取消定义
+
+宏按源码的处理顺序生效，先定义再引用；同名宏重新定义后，后续引用采用最新定义。
+
+宏 **不受 `module`、`begin ... end` 等普通作用域限制**，也不属于某个模块实例。在模块内部定义宏，不会使它自动成为该模块的局部定义。
+
+取消宏定义使用 `` `undef ``，其后的宏名不加反引号：
+
+```verilog
+`define DEBUG
+// 此处 DEBUG 已定义
+
+`undef DEBUG
+// 此后 DEBUG 未定义
+```
+
+## 2. 文件包含：`include
+
+`` `include `` 将指定文件的内容插入当前位置，类似于复制粘贴源码。  
+
+例如，定义文件 `defs.vh` 内容为（`.vh` 扩展名常用于存放宏和公共声明）：
+
+```verilog
+`define DATA_WIDTH 8
+```
+
+使用它的模块文件：
+
+```verilog
+`include "defs.vh"
+
+module pass_data (
+    input  wire [`DATA_WIDTH-1:0] a,
+    output wire [`DATA_WIDTH-1:0] y
+);
+    assign y = a;
+endmodule
+```
+
+**注意**：
+- 包含文件中可以继续使用 `include，形成嵌套包含；
+- 一般常用来引入自定义的宏定义库；
+- 通常不用 `` `include `` 引入其他 .v 文件定义的电路模块，若一个 `.v` 文件已经单独参与编译，又通过 `` `include `` 引入其他文件参与编译，可能在评测机造成重复定义。
+
+## 3. 条件编译
+
+条件编译根据 **宏是否已定义**，决定保留哪一段源码，未选中的代码在预处理时被排除。
+
+| 指令 | 含义 |
+|---|---|
+| `` `ifdef NAME `` | 检查宏 `NAME` 是否已定义 |
+| `` `ifndef NAME `` | 检查宏 `NAME` 是否未定义 |
+| `` `elsif OTHER `` | 前面分支均未选中时，检查宏 `OTHER` 是否已定义 |
+| `` `else `` | 前面分支均未选中时，选择此分支 |
+| `` `endif `` | 结束当前这组条件编译 |
+
+```verilog
+`define USE_AND
+
+module logic_op (
+    input  wire a, b,
+    output wire y
+);
+
+`ifdef USE_AND
+    assign y = a & b;
+`elsif USE_XOR
+    assign y = a ^ b;
+`else
+    assign y = a | b;
+`endif
+
+endmodule
+```
+
+**注意**：
+- 每组以 `` `ifdef `` 或 `` `ifndef`` 开始，以一个配对的 `` `endif`` 结束，允许嵌套；
+- `` `elsif`` 不需要单独配一个 `` `endif``；
+- 正确拼写是 **`` `elsif``**，不是 elseif，也不是 elif；
+- 指令后检查的宏名不加反引号。
+
+## 4. 时间尺度：`timescale
+
+`` `timescale `` 用于设置模块的 **仿真时间单位与时间精度**，不执行文本替换。
+
+```verilog
+`timescale 1ns / 1ps
+```
+
+| 部分 | 含义 |
+|---|---|
+| `1ns` | 时间单位，代码中的 `#1` 表示 1 ns |
+| `1ps` | 时间精度，延迟按 1 ps 的精度取整 |
+
+在该设置下，以下语句写在仿真过程内：
+
+```verilog
+#100;     // 延迟 100 ns
+#0.5;     // 延迟 500 ps
+#0.0004;  // 0.4 ps，舍入后为 0 ps
+```
+
+```verilog
+always #50 clk = ~clk; // 每 50 ns 翻转一次，周期为 100 ns
+```
+
+**注意**：
+
+- 时间单位与精度的数值可为 `1`、`10`、`100`，单位可为 `s`、`ms`、`us`、`ns`、`ps`、`fs`；
+- 精度不能比时间单位更粗。
+
+## 5. 默认网络类型：`default_nettype
+
+`` `default_nettype `` 用于控制 **隐式声明的网络类型**。
+
+默认情况下，使用未声明的标识符，可能自动创建 **1 位的 `wire`**。因此，信号名拼错或遗漏声明，可能没有立即报错。
+
+使用 `` `default_nettype none `` 可以禁止隐式网络声明：
+
+```verilog
+`default_nettype none
+
+module example (
+    input  wire [3:0] a,
+    output wire [3:0] y
+);
+    assign y = a;
+    assign yy = a; // yy 未声明，编译报错
+endmodule
+
+`default_nettype wire
+// 恢复默认声明，防止影响后续代码
+
+```
+
+**注意**：
+- 声明为 `none` 时要求显式声明网络，包括 `input` 、`output` 等也需要显式声明类型；
+- 声明网络类型与变量类型不同，不是随意的，目前可能用到的主要为 `wire` 和 `none`。
+
+# 七、函数 function
+
+## 1. 定义
+
+函数定义在模块内部、`initial` 和 `always` 等过程块外部，使用 `function ... endfunction` 划定界限：
+
+```verilog
+function [1:0] add_bit; // 有 ";"
+    input a, b, cin;
+
+    begin
+        add_bit = {1'b0, a}
+                + {1'b0, b}
+                + {1'b0, cin};
+    end
+endfunction
+```
+
+**注意**：
+- 函数名后的分号不能省略；
+
+- 返回值为指定位宽的四态值（目前常用整数，也可声明为浮点数 `real` ）：
+  - `[1:0]` 指定返回值为 2 位；省略返回位宽和类型时，默认返回 **1 位**；
+  - 可以使用 `signed` 指定返回向量为有符号，也可以指定 `integer` 等返回类型；
+  - 不可指定为 `wire` 、 `reg` 等变量类型；
+
+- 至少有一个 `input` 参数，不允许声明 `output`、`inout` 参数；
+  
+- 返回值就是 `function` 后声明的变量，可以在函数体中直接赋值，**给函数名赋值，就是设置返回值**；
+
+- 给函数名赋值后仍会继续执行后面的语句，不会立即退出；
+
+- 只能返回一个值，但可以将多个结果拼接起来返回，例如 `{carry, sum}`。
+  
+- 函数体内部不包含时序元素，为一“瞬间”发生的过程：
+  - 函数内部使用阻塞赋值 `=`，不能使用非阻塞赋值 `<=`。
+  - 不能包含 `#` 延时、`@` 事件控制、`wait` 等时间控制。
+  - 不能在函数内部建立 `initial`、`always` 过程。
+
+- 函数内部可以调用其他函数，不能调用任务 `task`。
+
+## 2. 调用
+
+函数调用写成 `函数名(实参列表)`，实参与输入参数按位置对应：
+
+```verilog
+wire [1:0] result;
+assign result = add_bit(a, b, cin);
+```
+
+```verilog
+always @(*) begin
+    result_reg = add_bit(a, b, cin);
+end
+```
+
+传统 Verilog 中，函数调用不能单独作为一条语句使用：
+
+```verilog
+add_bit(a, b, cin); // 不可以：没有使用返回值
+```
+函数调用 **不推进仿真时间**，但综合出的实际电路有传播延迟。
